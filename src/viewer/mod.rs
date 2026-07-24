@@ -1,5 +1,5 @@
-//! Interactive full-screen viewer: scrolling, mouse support, and clickable
-//! [ copy ] buttons on code blocks.
+//! Interactive full-screen viewer: scrolling, mouse support, text search, and
+//! clickable [ copy ] buttons on code blocks.
 
 use std::io::{self, Write};
 
@@ -15,6 +15,9 @@ use termimad::crossterm::{
 };
 
 use std::collections::HashSet;
+
+mod search;
+use search::{Found, Search};
 
 use crate::Doc;
 use crate::clipboard;
@@ -194,6 +197,7 @@ fn event_loop(renderer: &Renderer, docs: &[Doc], out: &mut io::Stdout) -> io::Re
     let mut scroll = 0usize;
     let mut flash: Option<String> = None;
     let mut picker = BlockPicker::new();
+    let mut search = Search::new();
     // Kitty image data transmitted to the terminal so far. Ids are stable
     // across rebuilds (they live in the renderer's cache), so a resize does
     // not retransmit.
@@ -212,6 +216,7 @@ fn event_loop(renderer: &Renderer, docs: &[Doc], out: &mut io::Stdout) -> io::Re
             content_height,
             width as usize,
             flash.as_deref(),
+            &search,
             &mut transmitted,
             gfx,
         ) {
@@ -225,9 +230,37 @@ fn event_loop(renderer: &Renderer, docs: &[Doc], out: &mut io::Stdout) -> io::Re
         match event {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
                 flash = None;
+                // The search prompt owns every key while it is open, so a
+                // query may contain digits, q, or any other bound letter.
+                if search.is_open() {
+                    match key.code {
+                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            break Ok(());
+                        }
+                        KeyCode::Char(c)
+                            if !key
+                                .modifiers
+                                .intersects(KeyModifiers::CONTROL.union(KeyModifiers::ALT)) =>
+                        {
+                            search.push(c);
+                        }
+                        KeyCode::Backspace => search.backspace(),
+                        KeyCode::Enter => match search.commit(&view.lines, scroll) {
+                            Found::Line(line) => scroll = scroll_to(line, content_height),
+                            Found::Missing(message) => flash = Some(message),
+                            Found::Empty => {}
+                        },
+                        KeyCode::Esc => search.clear_input(),
+                        _ => {}
+                    }
+                    continue;
+                }
                 match key.code {
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         break Ok(());
+                    }
+                    KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        search.open();
                     }
                     KeyCode::Char(digit @ '0'..='9') => {
                         match picker.push_digit(digit, view.buttons.len()) {
@@ -249,10 +282,20 @@ fn event_loop(renderer: &Renderer, docs: &[Doc], out: &mut io::Stdout) -> io::Re
                         }
                         continue;
                     }
-                    // Esc cancels a pending block number before it quits.
+                    // Esc cancels a pending block number, then a search,
+                    // before it quits.
                     KeyCode::Esc if !picker.is_empty() => {
                         picker.clear();
                         continue;
+                    }
+                    KeyCode::Esc if search.is_active() => {
+                        search.clear();
+                        continue;
+                    }
+                    KeyCode::Char('n' | 'N') if search.is_active() => {
+                        if let Some(line) = search.advance(key.code == KeyCode::Char('n')) {
+                            scroll = scroll_to(line, content_height);
+                        }
                     }
                     KeyCode::Char('q') | KeyCode::Esc => break Ok(()),
                     KeyCode::Up | KeyCode::Char('k') => scroll = scroll.saturating_sub(1),
@@ -285,12 +328,23 @@ fn event_loop(renderer: &Renderer, docs: &[Doc], out: &mut io::Stdout) -> io::Re
                 _ => {}
             },
             Event::Resize(new_width, new_height) => {
+                // Whether the parked match was on screen before the resize:
+                // only then does the viewport follow it afterwards — a user
+                // who scrolled away from it stays where they are.
+                let followed = search
+                    .current_line()
+                    .is_some_and(|line| (scroll..scroll + content_height).contains(&line));
                 width = new_width;
                 height = new_height;
                 // Font/monitor changes can alter the pixel size of a cell,
                 // not just the column count; refresh before laying out.
                 renderer.set_cell(kitty::cell_size());
                 view = build(renderer, docs, width as usize);
+                // Re-wrapped lines moved every match to a new line number.
+                search.refresh(&view.lines);
+                if followed && let Some(line) = search.current_line() {
+                    scroll = scroll_to(line, (height as usize).saturating_sub(1));
+                }
             }
             _ => {}
         }
@@ -305,6 +359,12 @@ fn event_loop(renderer: &Renderer, docs: &[Doc], out: &mut io::Stdout) -> io::Re
         out.flush()?;
     }
     result
+}
+
+/// Scroll offset that brings `line` on screen, a third of the way down so a
+/// match keeps its surrounding context visible. The caller clamps.
+const fn scroll_to(line: usize, content_height: usize) -> usize {
+    line.saturating_sub(content_height / 3)
 }
 
 fn copy_block(view: &View, index: usize) -> Option<String> {
@@ -335,6 +395,7 @@ fn status_line(
     scroll: usize,
     content_height: usize,
     width: usize,
+    search: &Search,
 ) -> String {
     let titles = sanitize(
         &docs
@@ -351,12 +412,30 @@ fn status_line(
         1 => " · click [ copy ] or press 1".to_string(),
         n => format!(" · click [ copy ] or type 1-{n}"),
     };
-    // Mouse capture swallows drag-selection; holding Shift hands the drag
-    // back to the terminal, so the hint belongs next to the mouse actions.
-    let info = format!(
-        " · {start}-{end}/{} · ↑↓ scroll{copy_hint} · shift+drag select · q quit",
-        view.lines.len()
-    );
+    // Hints in descending usefulness. A running search takes the copy hint's
+    // slot: its match counter is what matters while it is on screen. Mouse
+    // capture swallows drag-selection, so shift+drag needs advertising too.
+    let hints = [
+        " · ↑↓ scroll".to_string(),
+        search.hint().unwrap_or(copy_hint),
+        " · ^F find".to_string(),
+        " · shift+drag select".to_string(),
+    ];
+    let position = format!(" · {start}-{end}/{}", view.lines.len());
+    let quit = " · q quit";
+    // Hints that do not fit are dropped from the tail rather than clipped, so
+    // "q quit" survives on a narrow terminal; 2 columns are kept for a title.
+    let budget = width.saturating_sub(display_width(&position) + display_width(quit) + 2);
+    let mut info = position;
+    let mut used = 0;
+    for hint in hints {
+        used += display_width(&hint);
+        if used > budget {
+            break;
+        }
+        info.push_str(&hint);
+    }
+    info.push_str(quit);
     // A long filename must not push the key hints off-screen.
     let avail = width.saturating_sub(display_width(&info) + 2);
     let mut title = truncate_display(&titles, avail);
@@ -375,6 +454,7 @@ fn draw(
     content_height: usize,
     width: usize,
     flash: Option<&str>,
+    search: &Search,
     transmitted: &mut HashSet<u32>,
     gfx: kitty::Graphics,
 ) -> io::Result<()> {
@@ -385,7 +465,10 @@ fn draw(
             Clear(ClearType::CurrentLine)
         )?;
         if let Some(line) = view.lines.get(scroll + row) {
-            queue!(out, Print(line))?;
+            match search.highlight(scroll + row, line) {
+                Some(painted) => queue!(out, Print(painted))?,
+                None => queue!(out, Print(line))?,
+            }
         }
     }
 
@@ -409,9 +492,11 @@ fn draw(
         }
     }
 
-    let status = match flash {
-        Some(message) => message.to_string(),
-        None => status_line(view, docs, scroll, content_height, width),
+    // The prompt owns the status bar while it is open.
+    let status = match (search.prompt(), flash) {
+        (Some(prompt), _) => prompt,
+        (None, Some(message)) => message.to_string(),
+        (None, None) => status_line(view, docs, scroll, content_height, width, search),
     };
     let status = truncate_display(&status, width);
     let pad = width.saturating_sub(display_width(&status));

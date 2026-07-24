@@ -8,7 +8,8 @@ With no FILE, or when FILE is -, read standard input.
 
 When stdout is a terminal, catmd opens an interactive viewer:
 scroll with ↑/↓, copy a code block to the clipboard by clicking
-its [ copy ] button (or pressing its number), press q to quit.
+its [ copy ] button (or pressing its number), search with Ctrl-F
+(n/N for the next/previous match), press q to quit.
 When output is piped, catmd prints plain formatted text.
 
 Options:
