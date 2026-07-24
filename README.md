@@ -7,6 +7,8 @@ with an interactive viewer and one-click copying of code blocks.
 catmd README.md
 ```
 
+![alt text](assets/sample.png)
+
 ## Features
 
 - **Formatted output** — colored headers, **bold**/*italic*, inline code,
