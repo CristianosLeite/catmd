@@ -7,6 +7,8 @@ with an interactive viewer and one-click copying of code blocks.
 catmd README.md
 ```
 
+![alt text](assets/sample.png)
+
 ## Features
 
 - **Formatted output** — colored headers, **bold**/*italic*, inline code,
@@ -33,14 +35,53 @@ contributions welcome.
 
 ## Installation
 
+### Quick install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/CristianosLeite/catmd/main/scripts/install.sh | bash
+```
+
+This downloads the source, installs the build prerequisites for your
+distro, builds the release binary, and installs `catmd` into
+`~/.cargo/bin` (make sure it is on your `PATH`). It builds the latest
+development version from the `main` branch — as with any `curl | bash`
+installer, feel free to read
+[`scripts/install.sh`](scripts/install.sh) before running it. From a
+local checkout the same thing is just:
+
+```sh
+./scripts/install.sh
+```
+
+### From source
+
 Requires a Rust toolchain, version 1.97.1 or newer (edition 2024).
 
 ```sh
-cargo install --path .
+cargo install --locked --path .
 ```
 
 This installs the `catmd` binary into `~/.cargo/bin` (make sure it is on
 your `PATH`).
+
+### Build script
+
+If you don't have a toolchain set up yet, `scripts/build-linux.sh` does the
+whole thing: it detects your distro (Debian/Ubuntu, Fedora/RHEL, Arch,
+openSUSE, Alpine), installs the build prerequisites (C compiler,
+`pkg-config`, `curl`) with the native package manager, bootstraps Rust via
+[rustup] if it's missing, and builds the release binary.
+
+```sh
+./scripts/build-linux.sh            # install prerequisites + build target/release/catmd
+./scripts/build-linux.sh --install  # also install to ~/.cargo/bin
+```
+
+Package installation uses `sudo` when run as a regular user; if everything
+is already installed, the script skips straight to the build and needs no
+privileges.
+
+[rustup]: https://rustup.rs
 
 ## Usage
 
