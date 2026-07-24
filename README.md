@@ -44,8 +44,10 @@ curl -fsSL https://raw.githubusercontent.com/CristianosLeite/catmd/main/scripts/
 This downloads the source, installs the build prerequisites for your
 distro, builds the release binary, and installs `catmd` into
 `~/.cargo/bin` (make sure it is on your `PATH`). It builds the latest
-development version from the `main` branch. From a local checkout the
-same thing is just:
+development version from the `main` branch — as with any `curl | bash`
+installer, feel free to read
+[`scripts/install.sh`](scripts/install.sh) before running it. From a
+local checkout the same thing is just:
 
 ```sh
 ./scripts/install.sh
