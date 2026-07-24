@@ -1,0 +1,15 @@
+[package]
+name = "catmd"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.1"
+description = "cat for Markdown: render files formatted in the terminal, with copyable code blocks"
+license = "MIT"
+
+[dependencies]
+arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
+base64 = "0.23.0"
+libc = "0.2.189"
+syntect = "5.3.0"
+termimad = "0.35.1"
+unicode-width = "0.2.2"

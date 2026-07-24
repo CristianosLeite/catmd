@@ -1,0 +1,11 @@
+# Build artifacts
+/target
+
+# IDE / editor configuration
+.idea/
+.vscode/
+.fleet/
+.zed/
+*.iml
+*.swp
+*~
