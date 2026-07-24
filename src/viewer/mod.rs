@@ -14,9 +14,12 @@ use termimad::crossterm::{
     terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
 
+use std::collections::HashSet;
+
 use crate::Doc;
 use crate::clipboard;
-use crate::render::{CopyButton, Renderer};
+use crate::image::kitty;
+use crate::render::{CopyButton, ImageSpan, Renderer};
 use crate::text::{display_width, has_hidden_chars, sanitize, truncate_display};
 
 const TITLE_STYLE: &str = "\x1b[1m\x1b[38;5;208m";
@@ -26,13 +29,15 @@ const RESET: &str = "\x1b[0m";
 struct View {
     lines: Vec<String>,
     buttons: Vec<CopyButton>,
+    images: Vec<ImageSpan>,
 }
 
 /// Renders all documents into one scrollable view. Multiple documents get
-/// title separators; button lines are offset to view coordinates.
+/// title separators; button and image lines are offset to view coordinates.
 fn build(renderer: &Renderer, docs: &[Doc], width: usize) -> View {
     let mut lines: Vec<String> = Vec::new();
     let mut buttons: Vec<CopyButton> = Vec::new();
+    let mut images: Vec<ImageSpan> = Vec::new();
     for doc in docs {
         if docs.len() > 1 {
             if !lines.is_empty() {
@@ -45,14 +50,48 @@ fn build(renderer: &Renderer, docs: &[Doc], width: usize) -> View {
             lines.push(String::new());
         }
         let offset = lines.len();
-        let rendered = renderer.render_doc(&doc.source, width, buttons.len());
+        let rendered =
+            renderer.render_doc(&doc.source, width, buttons.len(), doc.base_dir.as_deref());
         lines.extend(rendered.lines);
         buttons.extend(rendered.buttons.into_iter().map(|mut button| {
             button.line += offset;
             button
         }));
+        images.extend(rendered.images.into_iter().map(|mut image| {
+            image.line += offset;
+            image
+        }));
     }
-    View { lines, buttons }
+    View {
+        lines,
+        buttons,
+        images,
+    }
+}
+
+/// The part of an image span visible in the viewport starting at `scroll`:
+/// (screen row, visible rows, crop). None when scrolled fully out of view.
+fn visible_slice(
+    image: &ImageSpan,
+    scroll: usize,
+    content_height: usize,
+) -> Option<(u16, u16, Option<kitty::Crop>)> {
+    let top = image.line.max(scroll);
+    let bottom = (image.line + image.rows as usize).min(scroll + content_height);
+    if top >= bottom {
+        return None;
+    }
+    let visible = (bottom - top) as u16;
+    let crop = if visible == image.rows {
+        None
+    } else {
+        let px_per_row = f64::from(image.img_h) / f64::from(image.rows);
+        Some(kitty::Crop {
+            y_px: ((top - image.line) as f64 * px_per_row) as u32,
+            h_px: ((f64::from(visible) * px_per_row) as u32).max(1),
+        })
+    };
+    Some(((top - scroll) as u16, visible, crop))
 }
 
 /// Multi-digit block selection: typed digits accumulate and the copy fires
@@ -155,12 +194,17 @@ fn event_loop(renderer: &Renderer, docs: &[Doc], out: &mut io::Stdout) -> io::Re
     let mut scroll = 0usize;
     let mut flash: Option<String> = None;
     let mut picker = BlockPicker::new();
+    // Kitty image data transmitted to the terminal so far. Ids are stable
+    // across rebuilds (they live in the renderer's cache), so a resize does
+    // not retransmit.
+    let mut transmitted: HashSet<u32> = HashSet::new();
+    let gfx = renderer.graphics();
 
-    loop {
+    let result = loop {
         let content_height = (height as usize).saturating_sub(1);
         let max_scroll = view.lines.len().saturating_sub(content_height);
         scroll = scroll.min(max_scroll);
-        draw(
+        if let Err(err) = draw(
             out,
             &view,
             docs,
@@ -168,13 +212,23 @@ fn event_loop(renderer: &Renderer, docs: &[Doc], out: &mut io::Stdout) -> io::Re
             content_height,
             width as usize,
             flash.as_deref(),
-        )?;
+            &mut transmitted,
+            gfx,
+        ) {
+            break Err(err);
+        }
 
-        match event::read()? {
+        let event = match event::read() {
+            Ok(event) => event,
+            Err(err) => break Err(err),
+        };
+        match event {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
                 flash = None;
                 match key.code {
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        break Ok(());
+                    }
                     KeyCode::Char(digit @ '0'..='9') => {
                         match picker.push_digit(digit, view.buttons.len()) {
                             Pick::Copy(index) => flash = copy_block(&view, index),
@@ -200,7 +254,7 @@ fn event_loop(renderer: &Renderer, docs: &[Doc], out: &mut io::Stdout) -> io::Re
                         picker.clear();
                         continue;
                     }
-                    KeyCode::Char('q') | KeyCode::Esc => break,
+                    KeyCode::Char('q') | KeyCode::Esc => break Ok(()),
                     KeyCode::Up | KeyCode::Char('k') => scroll = scroll.saturating_sub(1),
                     KeyCode::Down | KeyCode::Char('j') => scroll = (scroll + 1).min(max_scroll),
                     KeyCode::PageUp => scroll = scroll.saturating_sub(content_height),
@@ -233,12 +287,24 @@ fn event_loop(renderer: &Renderer, docs: &[Doc], out: &mut io::Stdout) -> io::Re
             Event::Resize(new_width, new_height) => {
                 width = new_width;
                 height = new_height;
+                // Font/monitor changes can alter the pixel size of a cell,
+                // not just the column count; refresh before laying out.
+                renderer.set_cell(kitty::cell_size());
                 view = build(renderer, docs, width as usize);
             }
             _ => {}
         }
+    };
+
+    // Free transmitted image data in the terminal; leaving the alternate
+    // screen removes the placements but not the stored pixels.
+    if !transmitted.is_empty() {
+        for id in &transmitted {
+            queue!(out, Print(gfx.free(*id)))?;
+        }
+        out.flush()?;
     }
-    Ok(())
+    result
 }
 
 fn copy_block(view: &View, index: usize) -> Option<String> {
@@ -298,6 +364,7 @@ fn status_line(
     format!(" {title}{info}")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw(
     out: &mut io::Stdout,
     view: &View,
@@ -306,6 +373,8 @@ fn draw(
     content_height: usize,
     width: usize,
     flash: Option<&str>,
+    transmitted: &mut HashSet<u32>,
+    gfx: kitty::Graphics,
 ) -> io::Result<()> {
     for row in 0..content_height {
         queue!(
@@ -315,6 +384,26 @@ fn draw(
         )?;
         if let Some(line) = view.lines.get(scroll + row) {
             queue!(out, Print(line))?;
+        }
+    }
+
+    if !view.images.is_empty() {
+        // Placements are tied to screen positions, so scrolling means
+        // removing them all and re-placing the visible slices. The pixel
+        // data itself is transmitted only once per image.
+        queue!(out, Print(gfx.delete_placements()))?;
+        for image in &view.images {
+            let Some((row, rows, crop)) = visible_slice(image, scroll, content_height) else {
+                continue;
+            };
+            if transmitted.insert(image.id) {
+                queue!(out, Print(gfx.transmit(image.id, &image.png)))?;
+            }
+            queue!(
+                out,
+                cursor::MoveTo(0, row),
+                Print(gfx.place(image.id, image.cols, rows, crop))
+            )?;
         }
     }
 

@@ -4,6 +4,7 @@ fn doc(title: &str, source: &str) -> Doc {
     Doc {
         title: title.to_string(),
         source: source.to_string(),
+        base_dir: None,
     }
 }
 
@@ -114,4 +115,91 @@ fn status_line_keeps_hints_when_title_is_long() {
     assert!(status.chars().count() <= 80);
     assert!(status.contains("q quit"));
     assert!(status.contains('…'));
+}
+
+fn span(line: usize, rows: u16, img_h: u32) -> ImageSpan {
+    ImageSpan {
+        line,
+        cols: 10,
+        rows,
+        img_h,
+        id: 1,
+        png: std::rc::Rc::new(Vec::new()),
+    }
+}
+
+#[test]
+fn fully_visible_image_needs_no_crop() {
+    let (row, rows, crop) = visible_slice(&span(5, 10, 200), 0, 30).unwrap();
+    assert_eq!((row, rows), (5, 10));
+    assert!(crop.is_none());
+}
+
+#[test]
+fn image_scrolled_past_the_top_is_cropped_from_above() {
+    // Span at lines 5..15, scrolled to 8: rows 8..15 visible (7 rows).
+    let (row, rows, crop) = visible_slice(&span(5, 10, 200), 8, 30).unwrap();
+    assert_eq!(row, 0);
+    assert_eq!(rows, 7);
+    let crop = crop.unwrap();
+    // 3 of 10 rows hidden -> 60 of 200 px skipped, 140 px shown.
+    assert_eq!(crop.y_px, 60);
+    assert_eq!(crop.h_px, 140);
+}
+
+#[test]
+fn image_reaching_below_the_viewport_is_cropped_from_below() {
+    // Span at lines 20..30, viewport shows lines 0..25: rows 20..25 visible.
+    let (row, rows, crop) = visible_slice(&span(20, 10, 200), 0, 25).unwrap();
+    assert_eq!(row, 20);
+    assert_eq!(rows, 5);
+    let crop = crop.unwrap();
+    assert_eq!(crop.y_px, 0);
+    assert_eq!(crop.h_px, 100);
+}
+
+#[test]
+fn offscreen_images_are_skipped() {
+    assert!(visible_slice(&span(50, 10, 200), 0, 30).is_none());
+    assert!(visible_slice(&span(0, 10, 200), 20, 30).is_none());
+}
+
+#[test]
+fn build_offsets_image_spans_across_documents() {
+    let dir = std::env::temp_dir().join("catmd-viewer-test-images");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut img = image::RgbaImage::new(2, 2);
+    for px in img.pixels_mut() {
+        *px = image::Rgba([255, 0, 0, 255]);
+    }
+    img.save(dir.join("p.png")).unwrap();
+    let renderer = Renderer::with_images(
+        crate::image::Mode::Kitty { tmux: false },
+        kitty::CellSize {
+            width: 8,
+            height: 16,
+        },
+    );
+    let docs = [
+        Doc {
+            title: "a.md".to_string(),
+            source: "![x](p.png)\n".to_string(),
+            base_dir: Some(dir.clone()),
+        },
+        Doc {
+            title: "b.md".to_string(),
+            source: "![y](p.png)\n".to_string(),
+            base_dir: Some(dir.clone()),
+        },
+    ];
+    let view = build(&renderer, &docs, 60);
+    std::fs::remove_dir_all(&dir).ok();
+    assert_eq!(view.images.len(), 2);
+    assert!(view.images[1].line > view.images[0].line);
+    // Both spans point at empty placeholder rows in view coordinates.
+    for image in &view.images {
+        assert_eq!(view.lines[image.line], "");
+    }
+    // The same file is cached once: both spans share one id and payload.
+    assert_eq!(view.images[0].id, view.images[1].id);
 }

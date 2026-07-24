@@ -11,6 +11,14 @@ pub enum Segment<'a> {
         lang: &'a str,
         body: String,
     },
+    /// A line holding nothing but an inline image with a local destination,
+    /// e.g. `![alt](assets/pic.png)`. `raw` is the original line so renderers
+    /// can fall back to plain markdown when the image cannot be loaded.
+    Image {
+        alt: String,
+        dest: String,
+        raw: String,
+    },
 }
 
 /// An open fenced code block and the container context it lives in.
@@ -87,6 +95,122 @@ fn strip_indent(line: &str, max: usize) -> &str {
     &line[leading_spaces(line).min(max)..]
 }
 
+/// Resolves CommonMark backslash escapes: a backslash before an ASCII
+/// punctuation character stands for that character.
+fn unescape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\'
+            && let Some(&next) = chars.peek()
+            && next.is_ascii_punctuation()
+        {
+            out.push(next);
+            chars.next();
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Percent-decodes a destination (CommonMark destinations are URI-style, so
+/// `my%20pic.png` names `my pic.png`). Sequences that are not `%` plus two
+/// hex digits pass through, and if the decoded bytes are not valid UTF-8 the
+/// input is returned unchanged so literal-`%` filenames stay findable.
+fn percent_decode(text: &str) -> String {
+    if !text.contains('%') {
+        return text.to_string();
+    }
+    let raw = text.as_bytes();
+    let mut bytes = Vec::with_capacity(raw.len());
+    let mut i = 0;
+    while i < raw.len() {
+        let hex = |b: u8| (b as char).to_digit(16);
+        if raw[i] == b'%'
+            && i + 2 < raw.len()
+            && let (Some(hi), Some(lo)) = (hex(raw[i + 1]), hex(raw[i + 2]))
+        {
+            bytes.push((hi * 16 + lo) as u8);
+            i += 3;
+        } else {
+            bytes.push(raw[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(bytes).unwrap_or_else(|_| text.to_string())
+}
+
+/// Parses a line that consists solely of an inline image, returning its alt
+/// text and destination. Pragmatic subset of CommonMark: the direct form
+/// `![alt](dest)` with an optional quoted title and optional `<>` around the
+/// destination. Reference-style images, mid-sentence images, and remote
+/// (http/https) destinations return None and stay ordinary markdown.
+fn parse_image_line(line: &str) -> Option<(String, String)> {
+    // 4+ leading spaces would be an indented code block.
+    if leading_spaces(line) > 3 {
+        return None;
+    }
+    let rest = line.trim().strip_prefix("![")?;
+
+    // Find the `]` matching the opening `![`, allowing nested and
+    // backslash-escaped brackets in alt (a backslash escapes the next
+    // character, so `\\]` is an escaped backslash before a structural `]`).
+    let mut depth = 0usize;
+    let mut alt_end = None;
+    let mut escaped = false;
+    for (i, c) in rest.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' => escaped = true,
+            '[' => depth += 1,
+            ']' if depth > 0 => depth -= 1,
+            ']' => {
+                alt_end = Some(i);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let alt_end = alt_end?;
+    let alt = &rest[..alt_end];
+    let inner = rest[alt_end + 1..]
+        .strip_prefix('(')?
+        .strip_suffix(')')?
+        .trim();
+
+    // Destination: either `<...>` or everything up to the first whitespace.
+    let (dest, title) = if let Some(bracketed) = inner.strip_prefix('<') {
+        let end = bracketed.find('>')?;
+        (&bracketed[..end], bracketed[end + 1..].trim_start())
+    } else {
+        match inner.find(char::is_whitespace) {
+            Some(end) => (&inner[..end], inner[end..].trim_start()),
+            None => (inner, ""),
+        }
+    };
+    // Anything after the destination must be a quoted title.
+    let title_ok = title.is_empty()
+        || (title.len() >= 2
+            && ((title.starts_with('"') && title.ends_with('"'))
+                || (title.starts_with('\'') && title.ends_with('\''))));
+    if dest.is_empty() || !title_ok {
+        return None;
+    }
+    // Decode before the remote check and before filesystem use: the written
+    // destination is URI-style (`a\(b\).png`, `my%20pic.png`), not a literal
+    // file name.
+    let dest = percent_decode(&unescape(dest));
+    let lower = dest.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        return None;
+    }
+    Some((unescape(alt), dest))
+}
+
 pub fn split_segments(src: &str) -> Vec<Segment<'_>> {
     let raw_lines: Vec<&str> = src.split_inclusive('\n').collect();
     let mut segments = Vec::new();
@@ -115,6 +239,17 @@ pub fn split_segments(src: &str) -> Vec<Segment<'_>> {
                         quotes,
                     });
                     lang = info.split_whitespace().next().unwrap_or("");
+                } else if quotes == 0
+                    && let Some((alt, dest)) = parse_image_line(content)
+                {
+                    if !markdown.is_empty() {
+                        segments.push(Segment::Markdown(std::mem::take(&mut markdown)));
+                    }
+                    segments.push(Segment::Image {
+                        alt,
+                        dest,
+                        raw: line.to_string(),
+                    });
                 } else {
                     markdown.push_str(line);
                     markdown.push('\n');

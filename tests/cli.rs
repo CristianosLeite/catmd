@@ -181,3 +181,37 @@ fn document_escape_sequences_are_not_emitted() {
     assert!(stdout.contains("SAFE"));
     assert!(stdout.contains("INJECTED"));
 }
+
+#[test]
+fn piped_output_keeps_images_as_markdown_text() {
+    // Stdout is piped here, so no graphics protocol may appear even for a
+    // loadable image; the image line renders as ordinary markdown.
+    let dir = std::env::temp_dir().join(format!("catmd-test-img-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let mut img = image::RgbaImage::new(2, 2);
+    for px in img.pixels_mut() {
+        *px = image::Rgba([0, 255, 0, 255]);
+    }
+    img.save(dir.join("pic.png")).expect("write png");
+    let md = dir.join("doc.md");
+    std::fs::write(&md, "# T\n\n![sample](pic.png)\n").expect("write md");
+    let output = catmd(&[md.to_str().unwrap()]);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(output.status.success());
+    let stdout = stdout_str(&output);
+    assert!(
+        !stdout.contains("\x1b_G"),
+        "graphics escapes in piped output"
+    );
+    assert!(stdout.contains("sample"), "image alt text missing");
+}
+
+#[test]
+fn missing_image_falls_back_to_text_and_succeeds() {
+    let path = temp_md("noimg", "![alt text](does-not-exist.png)\n");
+    let output = catmd(&[path.to_str().unwrap()]);
+    let _ = std::fs::remove_file(&path);
+    assert!(output.status.success());
+    let stdout = stdout_str(&output);
+    assert!(stdout.contains("alt text"), "fallback text missing");
+}
