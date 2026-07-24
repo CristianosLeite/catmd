@@ -6,18 +6,23 @@ compile_error!("catmd currently supports Linux only; see README.md (Platform sup
 
 mod cli;
 mod clipboard;
+mod image;
 mod render;
 mod segment;
 mod text;
 mod viewer;
 
 use std::io::{IsTerminal, Read};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-/// A Markdown document ready to render: its display title and source text.
+/// A Markdown document ready to render: its display title, source text, and
+/// the directory relative image paths resolve against (None for stdin, which
+/// resolves against the current directory).
 pub struct Doc {
     pub title: String,
     pub source: String,
+    pub base_dir: Option<PathBuf>,
 }
 
 fn read_stdin() -> std::io::Result<String> {
@@ -35,17 +40,25 @@ fn read_docs(files: &[String]) -> (Vec<Doc>, bool) {
     let mut failed = false;
     let mut stdin_used = false;
     for path in files {
-        let (title, source) = if path == "-" {
+        let (title, source, base_dir) = if path == "-" {
             if stdin_used {
                 continue;
             }
             stdin_used = true;
-            ("stdin".to_string(), read_stdin())
+            ("stdin".to_string(), read_stdin(), None)
         } else {
-            (path.clone(), std::fs::read_to_string(path))
+            let base_dir = Path::new(path)
+                .parent()
+                .filter(|dir| !dir.as_os_str().is_empty())
+                .map(Path::to_path_buf);
+            (path.clone(), std::fs::read_to_string(path), base_dir)
         };
         match source {
-            Ok(source) => docs.push(Doc { title, source }),
+            Ok(source) => docs.push(Doc {
+                title,
+                source,
+                base_dir,
+            }),
             Err(err) => {
                 eprintln!("catmd: {path}: {err}");
                 failed = true;
@@ -86,7 +99,14 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let renderer = render::Renderer::new();
+    // Pixel-protocol images need a terminal on the other end; piped output
+    // always keeps images as markdown text.
+    let image_mode = if std::io::stdout().is_terminal() {
+        image::detect_mode()
+    } else {
+        image::Mode::Text
+    };
+    let renderer = render::Renderer::with_images(image_mode, image::kitty::cell_size());
     if std::io::stdout().is_terminal() && !options.plain {
         if let Err(err) = viewer::run(&renderer, &docs) {
             eprintln!("catmd: {err}");
@@ -100,7 +120,9 @@ fn main() -> ExitCode {
         let width = terminal_width();
         let mut out = std::io::stdout().lock();
         for doc in &docs {
-            if let Err(err) = renderer.render_plain(&mut out, &doc.source, width) {
+            if let Err(err) =
+                renderer.render_plain(&mut out, &doc.source, width, doc.base_dir.as_deref())
+            {
                 if err.kind() == std::io::ErrorKind::BrokenPipe {
                     // The reader went away (`catmd file.md | head`): quit
                     // quietly, like cat.

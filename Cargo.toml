@@ -9,6 +9,7 @@ license = "MIT"
 [dependencies]
 arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
 base64 = "0.23.0"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 libc = "0.2.189"
 syntect = "5.3.0"
 termimad = "0.35.1"
