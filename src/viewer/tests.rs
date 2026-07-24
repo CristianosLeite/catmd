@@ -102,7 +102,7 @@ fn status_line_of_an_empty_document_reads_zero_zero() {
     let renderer = Renderer::new();
     let docs = [doc("empty.md", "")];
     let view = build(&renderer, &docs, 80);
-    let status = status_line(&view, &docs, 0, 20, 80);
+    let status = status_line(&view, &docs, 0, 20, 80, &Search::new());
     assert!(status.contains("0-0/0"), "status was: {status}");
 }
 
@@ -111,7 +111,7 @@ fn status_line_keeps_hints_when_title_is_long() {
     let renderer = Renderer::new();
     let docs = [doc(&"x".repeat(200), "hello\n")];
     let view = build(&renderer, &docs, 80);
-    let status = status_line(&view, &docs, 0, 20, 80);
+    let status = status_line(&view, &docs, 0, 20, 80, &Search::new());
     assert!(status.chars().count() <= 80);
     assert!(status.contains("q quit"));
     assert!(status.contains('…'));
@@ -122,8 +122,79 @@ fn status_line_mentions_shift_drag_selection() {
     let renderer = Renderer::new();
     let docs = [doc("a.md", "hello\n")];
     let view = build(&renderer, &docs, 80);
-    let status = status_line(&view, &docs, 0, 20, 80);
+    let status = status_line(&view, &docs, 0, 20, 80, &Search::new());
     assert!(status.contains("shift+drag select"), "status was: {status}");
+}
+
+#[test]
+fn status_line_advertises_search() {
+    let renderer = Renderer::new();
+    let docs = [doc("a.md", "hello\n")];
+    let view = build(&renderer, &docs, 80);
+    let status = status_line(&view, &docs, 0, 20, 80, &Search::new());
+    assert!(status.contains("^F find"), "status was: {status}");
+}
+
+#[test]
+fn a_running_search_replaces_the_copy_hint() {
+    let renderer = Renderer::new();
+    let docs = [doc("a.md", "```sh\nls\n```\n")];
+    let view = build(&renderer, &docs, 80);
+    let mut search = Search::new();
+    search.open();
+    search.push('l');
+    search.push('s');
+    search.commit(&view.lines, 0);
+    let status = status_line(&view, &docs, 0, 20, 80, &search);
+    assert!(status.contains("/ls 1/"), "status was: {status}");
+    assert!(!status.contains("[ copy ]"), "status was: {status}");
+}
+
+#[test]
+fn narrow_terminals_drop_hints_instead_of_the_quit_key() {
+    let renderer = Renderer::new();
+    let docs = [doc("a.md", "```sh\nls\n```\n")];
+    let view = build(&renderer, &docs, 40);
+    let status = status_line(&view, &docs, 0, 20, 40, &Search::new());
+    assert!(status.chars().count() <= 40, "status was: {status}");
+    assert!(status.contains("q quit"), "status was: {status}");
+    assert!(!status.contains("shift+drag"), "status was: {status}");
+}
+
+#[test]
+fn a_resize_keeps_the_parked_match_in_the_viewport() {
+    // A match near the bottom of a tall document…
+    let mut before: Vec<String> = vec![String::new(); 100];
+    before.push("needle".to_string());
+    let mut search = Search::new();
+    search.open();
+    for c in "needle".chars() {
+        search.push(c);
+    }
+    search.commit(&before, 0);
+    let content_height = 20;
+    let scroll = scroll_to(search.current_line().unwrap(), content_height);
+    assert!((scroll..scroll + content_height).contains(&100));
+
+    // …moves further down when narrower wrapping inserts lines before it.
+    let mut after: Vec<String> = vec![String::new(); 150];
+    after.push("needle".to_string());
+    search.refresh(&after);
+    let line = search.current_line().unwrap();
+    assert_eq!(line, 150);
+    // The event loop re-follows it: the new scroll shows the new line, which
+    // the stale offset (still at ~94) would not.
+    assert!(!(scroll..scroll + content_height).contains(&line));
+    let scroll = scroll_to(line, content_height);
+    assert!((scroll..scroll + content_height).contains(&line));
+}
+
+#[test]
+fn scroll_to_keeps_context_above_a_match() {
+    // A third of the viewport stays above the match…
+    assert_eq!(scroll_to(30, 30), 20);
+    // …but matches near the top do not scroll past the start.
+    assert_eq!(scroll_to(3, 30), 0);
 }
 
 fn span(line: usize, rows: u16, img_h: u32) -> ImageSpan {

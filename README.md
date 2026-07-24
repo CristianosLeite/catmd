@@ -114,6 +114,8 @@ Opens automatically when stdout is a terminal (skip it with `--plain`).
 | `g` / `G` (Home / End) | jump to top / bottom                                                                                                                             |
 | click `[ copy ]`       | copy that code block to the clipboard                                                                                                            |
 | type a block number    | copy that block; fires as soon as the number is unambiguous, `Enter` confirms an ambiguous prefix (e.g. `1` when block 12 exists), `Esc` cancels |
+| `Ctrl-F`               | search: type a query, `Enter` runs it, `Esc` cancels the prompt                                                                                   |
+| `n` / `N`              | jump to the next / previous match (wraps around); `Esc` clears the search                                                                        |
 | `Shift` + drag         | select text with the terminal's own selection (the viewer captures the mouse, so a plain drag scrolls instead)                                    |
 | `q`, `Esc`, `Ctrl-C`   | quit                                                                                                                                             |
 
@@ -137,6 +139,14 @@ characters and bidi overrides for safety. When a copied block contains
 characters that are invisible on screen (controls, bidi overrides,
 zero-width characters), the status bar adds **“⚠ contains hidden
 characters”** — review such a block before pasting it into a shell.
+
+`Ctrl-F` searches the rendered text. Matching is case-insensitive —
+including Unicode folds like `ß`/`SS` and the Greek final sigma — and runs
+on what is on screen, not on the Markdown source; styling is invisible to
+the query, so searching for `38` never hits a color code. Every match is
+highlighted, the one you are parked on more brightly; `n` and `N` walk
+through them (wrapping at the ends) and the status bar counts them, e.g.
+`/copy 3/23`. `Esc` clears the highlights.
 
 Note: while the viewer is open it captures the mouse, so normal
 drag-to-select is disabled — most terminals still allow native selection
@@ -219,6 +229,7 @@ cargo run -- README.md
 | `src/image/mod.rs`   | image loading, resource limits, terminal detection        |
 | `src/image/kitty.rs` | kitty graphics protocol commands (incl. tmux passthrough) |
 | `src/viewer/mod.rs`  | interactive full-screen viewer (scroll, mouse, copy)      |
+| `src/viewer/search/` | case-insensitive search over the rendered view            |
 | `src/text/mod.rs`    | sanitization and display-width math                       |
 | `src/clipboard.rs`   | clipboard back-ends and the detached holder process       |
 | `src/*/tests.rs`     | unit tests for the matching module                        |
