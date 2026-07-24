@@ -9,11 +9,12 @@ set -euo pipefail
 REPO="CristianosLeite/catmd"
 BRANCH="main"
 
-# Local checkout: the script sits next to build-linux.sh.
+# Local checkout: the script sits next to build-linux.sh. Run it via bash so
+# a lost executable bit (some filesystems, copied trees) doesn't matter.
 if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    if [ -x "$script_dir/build-linux.sh" ]; then
-        exec "$script_dir/build-linux.sh" --install
+    if [ -f "$script_dir/build-linux.sh" ]; then
+        exec bash "$script_dir/build-linux.sh" --install
     fi
 fi
 
@@ -32,4 +33,4 @@ echo "==> Downloading $REPO ($BRANCH)"
 curl -fsSL "https://github.com/$REPO/archive/refs/heads/$BRANCH.tar.gz" |
     tar -xz -C "$tmpdir" --strip-components=1
 
-"$tmpdir/scripts/build-linux.sh" --install
+bash "$tmpdir/scripts/build-linux.sh" --install

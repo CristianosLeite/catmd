@@ -17,7 +17,7 @@ for arg in "$@"; do
             echo "distro's package manager, installs Rust via rustup if missing, and runs"
             echo "'cargo build --release'."
             echo ""
-            echo "  --install   also run 'cargo install --path .' (installs to ~/.cargo/bin)"
+            echo "  --install   also run 'cargo install --locked' on the repo (installs to ~/.cargo/bin)"
             exit 0
             ;;
         *)
@@ -116,11 +116,11 @@ if ! command -v cargo >/dev/null 2>&1; then
     . "$HOME/.cargo/env"
 fi
 
-# Warn if the toolchain is older than Cargo.toml's rust-version.
+# Fail if the toolchain is older than Cargo.toml's rust-version.
 min_rust="$(sed -n 's/^rust-version *= *"\(.*\)"/\1/p' "$REPO_ROOT/Cargo.toml")"
 rustc_ver="$(rustc --version | awk '{print $2}')"
 if [ -n "$min_rust" ] && [ "$(printf '%s\n' "$min_rust" "$rustc_ver" | sort -V | head -n1)" != "$min_rust" ]; then
-    echo "warning: rustc $rustc_ver is older than the required $min_rust." >&2
+    echo "error: rustc $rustc_ver is older than the required $min_rust." >&2
     echo "Run 'rustup update' (or update your distro's Rust) and try again." >&2
     exit 1
 fi
