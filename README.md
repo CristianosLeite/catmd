@@ -7,7 +7,7 @@ with an interactive viewer and one-click copying of code blocks.
 catmd README.md
 ```
 
-![alt text](assets/sample.png)
+![catmd rendering its own README in a terminal](assets/sample.png)
 
 ## Features
 
@@ -15,6 +15,10 @@ catmd README.md
   lists, quotes, and drawn tables (powered by [termimad])
 - **Syntax-highlighted code blocks** — fenced blocks are highlighted by
   language (powered by [syntect]); unknown languages fall back to plain text
+- **Inline images** — local images are drawn at full pixel resolution in
+  terminals that support the [kitty graphics protocol]; elsewhere the
+  image reference stays ordinary markdown text (see
+  [Images](#images) below)
 - **Interactive viewer** — when stdout is a terminal, catmd opens a
   scrollable view where every code block has a clickable `[ copy ]` button
 - **Native clipboard** — copying works without any external tools, and the
@@ -24,6 +28,7 @@ catmd README.md
 
 [termimad]: https://crates.io/crates/termimad
 [syntect]: https://crates.io/crates/syntect
+[kitty graphics protocol]: https://sw.kovidgoyal.net/kitty/graphics-protocol/
 
 ## Platform support
 
@@ -136,6 +141,40 @@ Note: while the viewer is open it captures the mouse, so normal
 drag-to-select is disabled — most terminals still allow native selection
 while holding `Shift`.
 
+### Images
+
+An image referenced on a line of its own is rendered as a real picture
+when the terminal can draw one:
+
+```markdown
+![architecture diagram](docs/architecture.png)
+```
+
+**Where images render.** catmd detects support for the [kitty graphics
+protocol] from the environment: kitty, Ghostty, WezTerm, and Konsole
+qualify. In any other terminal — and always in piped output — the image
+reference is rendered as ordinary markdown text, so nothing is lost, just
+not drawn. The alt text appears as a dim caption under a rendered image.
+
+**What is supported.** Local PNG, JPEG, GIF (first frame), WebP, and BMP
+files, resolved relative to the markdown file's directory (the current
+directory for stdin). The destination may use CommonMark escapes and
+percent-encoding (`my%20pic.png`). Remote `http(s)` URLs, reference-style
+images (`![alt][ref]`), and images in the middle of a sentence stay as
+text. Anything unloadable — missing file, unsupported format such as SVG —
+falls back to text as well; a document never fails to render because of
+its images.
+
+**Overrides.** `CATMD_IMAGES=kitty` forces the protocol on when detection
+misses (inside tmux this emits tmux passthrough sequences, which require
+`allow-passthrough` enabled in your tmux configuration);
+`CATMD_IMAGES=none` disables images entirely.
+
+**Resource limits.** Image files are capped at 64 MiB, decoding is bounded
+in dimensions and memory, and a document referencing many distinct images
+stops rendering new ones (as text, gracefully) once a global budget is
+reached — a hostile markdown file cannot exhaust memory through images.
+
 ### Exit codes
 
 Like `cat`: `0` on success, `1` if any file could not be read (the
@@ -165,21 +204,24 @@ The status bar shows which mechanism was used (e.g. "via native").
 ```sh
 cargo test      # unit + integration tests
 cargo clippy    # lints
-cargo run -- sample.md
+cargo run -- README.md
 ```
 
 ### Code layout
 
-| File                 | Responsibility                                        |
-|----------------------|-------------------------------------------------------|
-| `src/main.rs`        | entry point: reads files, picks interactive vs. plain |
-| `src/cli/mod.rs`     | argument parsing and usage text                       |
-| `src/segment/mod.rs` | splits markdown into prose and fenced code blocks     |
-| `src/render/mod.rs`  | styling: termimad for prose, syntect for code         |
-| `src/viewer/mod.rs`  | interactive full-screen viewer (scroll, mouse, copy)  |
-| `src/clipboard.rs`   | clipboard back-ends and the detached holder process   |
-| `src/*/tests.rs`     | unit tests for the matching module                    |
-| `tests/cli.rs`       | end-to-end tests against the built binary             |
+| File                 | Responsibility                                            |
+|----------------------|-----------------------------------------------------------|
+| `src/main.rs`        | entry point: reads files, picks interactive vs. plain     |
+| `src/cli/mod.rs`     | argument parsing and usage text                           |
+| `src/segment/mod.rs` | splits markdown into prose, fenced code, and image lines  |
+| `src/render/mod.rs`  | styling: termimad for prose, syntect for code; image cache |
+| `src/image/mod.rs`   | image loading, resource limits, terminal detection        |
+| `src/image/kitty.rs` | kitty graphics protocol commands (incl. tmux passthrough) |
+| `src/viewer/mod.rs`  | interactive full-screen viewer (scroll, mouse, copy)      |
+| `src/text/mod.rs`    | sanitization and display-width math                       |
+| `src/clipboard.rs`   | clipboard back-ends and the detached holder process       |
+| `src/*/tests.rs`     | unit tests for the matching module                        |
+| `tests/cli.rs`       | end-to-end tests against the built binary                 |
 
 ## License
 
