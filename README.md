@@ -114,6 +114,7 @@ Opens automatically when stdout is a terminal (skip it with `--plain`).
 | `g` / `G` (Home / End) | jump to top / bottom                                                                                                                             |
 | click `[ copy ]`       | copy that code block to the clipboard                                                                                                            |
 | type a block number    | copy that block; fires as soon as the number is unambiguous, `Enter` confirms an ambiguous prefix (e.g. `1` when block 12 exists), `Esc` cancels |
+| `Shift` + drag         | select text with the terminal's own selection (the viewer captures the mouse, so a plain drag scrolls instead)                                    |
 | `q`, `Esc`, `Ctrl-C`   | quit                                                                                                                                             |
 
 Every code block is drawn in a numbered box:
