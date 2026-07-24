@@ -103,10 +103,11 @@ impl Search {
 
     /// Runs the typed query over `lines` and parks on the first hit at or
     /// after line `from`, wrapping to the top when there is none below.
+    /// An empty query only closes the prompt — like Esc, it leaves a
+    /// previously committed search (and its highlights) untouched.
     pub fn commit(&mut self, lines: &[String], from: usize) -> Found {
         let input = self.input.take().unwrap_or_default();
         if input.is_empty() {
-            self.clear();
             return Found::Empty;
         }
         self.needle = input.chars().flat_map(fold).collect();
@@ -275,11 +276,14 @@ fn scan(lines: &[String], needle: &[char]) -> Vec<Hit> {
 /// Rewrites `styled` with `hits` highlighted. The line's own SGR state is
 /// tracked so text after a match keeps its original color, and styling that
 /// starts inside a match is re-covered instead of overpainting the highlight.
+/// `hits` come from `scan` in ascending, non-overlapping order, so a single
+/// index walks them alongside the characters.
 fn paint(styled: &str, hits: &[Hit], current: Option<Hit>) -> String {
     let mut out = String::with_capacity(styled.len() + hits.len() * 32);
     let mut active = String::new();
     let mut chars = styled.chars().peekable();
     let mut index = 0usize;
+    let mut next = 0usize;
     let mut style: Option<&str> = None;
     let mut end = 0usize;
     while let Some(c) = chars.next() {
@@ -299,7 +303,7 @@ fn paint(styled: &str, hits: &[Hit], current: Option<Hit>) -> String {
             continue;
         }
         if style.is_none()
-            && let Some(hit) = hits.iter().find(|hit| hit.start == index)
+            && let Some(hit) = hits.get(next).filter(|hit| hit.start == index)
         {
             let chosen = if current == Some(*hit) {
                 CURRENT_STYLE
@@ -309,6 +313,7 @@ fn paint(styled: &str, hits: &[Hit], current: Option<Hit>) -> String {
             out.push_str(chosen);
             style = Some(chosen);
             end = index + hit.len;
+            next += 1;
         }
         out.push(c);
         index += 1;

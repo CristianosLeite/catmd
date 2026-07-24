@@ -133,6 +133,18 @@ fn an_empty_query_just_closes_the_prompt() {
 }
 
 #[test]
+fn an_empty_query_keeps_the_previous_search() {
+    // Enter on an empty prompt behaves like Esc: the committed search and
+    // its highlights survive.
+    let mut search = committed(&["x"], "x");
+    search.open();
+    assert!(matches!(search.commit(&lines(&["x"]), 0), Found::Empty));
+    assert!(!search.is_open());
+    assert!(search.is_active());
+    assert!(search.highlight(0, "x").is_some());
+}
+
+#[test]
 fn backspace_edits_the_pending_query() {
     let mut search = Search::new();
     search.open();
