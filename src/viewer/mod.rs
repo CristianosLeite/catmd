@@ -351,8 +351,10 @@ fn status_line(
         1 => " · click [ copy ] or press 1".to_string(),
         n => format!(" · click [ copy ] or type 1-{n}"),
     };
+    // Mouse capture swallows drag-selection; holding Shift hands the drag
+    // back to the terminal, so the hint belongs next to the mouse actions.
     let info = format!(
-        " · {start}-{end}/{} · ↑↓ scroll{copy_hint} · q quit",
+        " · {start}-{end}/{} · ↑↓ scroll{copy_hint} · shift+drag select · q quit",
         view.lines.len()
     );
     // A long filename must not push the key hints off-screen.

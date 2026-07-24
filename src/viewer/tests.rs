@@ -117,6 +117,15 @@ fn status_line_keeps_hints_when_title_is_long() {
     assert!(status.contains('…'));
 }
 
+#[test]
+fn status_line_mentions_shift_drag_selection() {
+    let renderer = Renderer::new();
+    let docs = [doc("a.md", "hello\n")];
+    let view = build(&renderer, &docs, 80);
+    let status = status_line(&view, &docs, 0, 20, 80);
+    assert!(status.contains("shift+drag select"), "status was: {status}");
+}
+
 fn span(line: usize, rows: u16, img_h: u32) -> ImageSpan {
     ImageSpan {
         line,
